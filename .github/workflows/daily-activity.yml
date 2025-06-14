@@ -1,0 +1,223 @@
+name: Daily Random Activity with PRs and Reviews
+
+# This workflow runs on a schedule and can also be triggered manually.
+on:
+  schedule:
+    # The cron expression '0 6 * * 1-5' means:
+    # 0: at minute 0
+    # 6: at hour 6 (6 AM UTC)
+    # *: every day of the month
+    # *: every month
+    # 1-5: on Monday through Friday
+    # This ensures the workflow is scheduled to run daily except on weekends.
+    # The actual execution on a given day will depend on the 'Random Skip Day Check' step.
+    - cron: '0 6 * * 1-5'
+  workflow_dispatch: # Allows you to manually trigger the workflow from the GitHub UI
+
+# Define the permissions needed by this workflow.
+# 'contents: write' is required to push commits and merge pull requests.
+# 'issues: write' is required to create and close issues.
+# 'pull-requests: write' is required to create pull requests and add comments.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Define the jobs to be executed in this workflow.
+jobs:
+  daily_activity:
+    # Specify the runner environment. 'ubuntu-latest' is a common choice.
+    runs-on: ubuntu-latest
+
+    # Define the sequence of steps for this job.
+    steps:
+      - name: Random Skip Day Check
+        # This step randomly decides whether to skip the entire workflow run for the day.
+        # It adds variability to your commit/issue history.
+        run: |
+          # Generate a random number between 0 and 99
+          RANDOM_NUMBER=$(( RANDOM % 100 ))
+          # Define the threshold for skipping. If RANDOM_NUMBER is less than this, the workflow skips.
+          # Here, 30 means a 30% chance to skip (numbers 0-29). Adjust as desired.
+          SKIP_THRESHOLD=30
+
+          echo "Random number generated for skip check: $RANDOM_NUMBER"
+
+          if [ "$RANDOM_NUMBER" -lt "$SKIP_THRESHOLD" ]; then
+            echo "Skipping workflow run for today (Random number $RANDOM_NUMBER is less than $SKIP_THRESHOLD)."
+            exit 0 # Exit successfully, preventing any further steps from running
+          else
+            echo "Proceeding with workflow run (Random number $RANDOM_NUMBER is greater than or equal to $SKIP_THRESHOLD)."
+          fi
+        shell: bash # Explicitly use bash for the script
+
+      - name: Checkout repository
+        # Uses the 'actions/checkout' action to fetch your repository's code.
+        # This is necessary to make changes (like creating a commit) to your repository.
+        uses: actions/checkout@v4
+
+      - name: Configure Git
+        # Set up Git user name and email for the commits made by the action.
+        # This makes the commits identifiable as coming from the GitHub Action.
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+        shell: bash # Explicitly use bash for the script
+
+      - name: Create Feature Branch, Commit, and Push
+        id: create_commit_pr # Add an ID to the step to reference its outputs
+        # This step creates a new branch, adds a random commit to it, and pushes it.
+        run: |
+          # Generate a random string to ensure unique branch names and file content.
+          RANDOM_STRING=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 10)
+          # Get the current date and time for the commit message, branch name, and file content.
+          DATE=$(date +%Y-%m-%d-%H-%M-%S)
+
+          # Define the new branch name.
+          BRANCH_NAME="feature/daily-activity-$DATE-$RANDOM_STRING"
+          echo "Creating new branch: $BRANCH_NAME"
+
+          # Create and switch to the new branch.
+          git checkout -b "$BRANCH_NAME"
+
+          # Append the current date and random string to 'random_activity.txt'.
+          # If the file doesn't exist, it will be created. If it does, content is added.
+          echo "$DATE - $RANDOM_STRING - This is an automated daily activity entry." >> random_activity.txt
+
+          # Add the modified file to the Git staging area.
+          git add random_activity.txt
+
+          # Construct a dynamic commit message for the new branch.
+          COMMIT_MESSAGE="feat: Daily random activity for $DATE-$RANDOM_STRING"
+
+          # Commit the changes.
+          git commit -m "$COMMIT_MESSAGE"
+
+          # Push the new branch to the remote repository.
+          git push origin "$BRANCH_NAME"
+          echo "Pushed branch: $BRANCH_NAME"
+
+          # Output the branch name for use in subsequent steps.
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          echo "commit_message=$COMMIT_MESSAGE" >> "$GITHUB_OUTPUT"
+        shell: bash # Explicitly use bash for the script
+
+      - name: Setup GitHub CLI
+        # This step uses the 'cli/gh-cli' action to install and configure the GitHub CLI.
+        # The GitHub CLI is used to interact with GitHub issues and PRs via command-line.
+        uses: cli/gh-cli@v2
+        with:
+          # Pass the GITHUB_TOKEN to the gh-cli action for authentication.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Pull Request
+        id: create_pr # Add an ID to the step to reference its outputs
+        # This step creates a pull request from the newly pushed branch.
+        run: |
+          # Get the branch name from the output of the previous step.
+          BRANCH_NAME="${{ steps.create_commit_pr.outputs.branch_name }}"
+          COMMIT_MESSAGE="${{ steps.create_commit_pr.outputs.commit_message }}"
+
+          echo "Attempting to create PR from branch: $BRANCH_NAME"
+
+          # Create the pull request.
+          # '--base main' specifies the target branch (e.g., 'main').
+          # '--head "$BRANCH_NAME"' specifies the source branch.
+          # '--title' sets the PR title.
+          # '--body' sets the PR description.
+          # '--json number -q .number' extracts only the PR number from the JSON output.
+          PR_NUMBER=$(gh pr create --base main --head "$BRANCH_NAME" --title "$COMMIT_MESSAGE" --body "Automated daily activity pull request for commit: $COMMIT_MESSAGE" --json number -q .number --repo ${{ github.repository }})
+          echo "Created Pull Request #$PR_NUMBER"
+
+          # Output the PR number for use in subsequent steps.
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+        shell: bash # Explicitly use bash for the script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed for gh CLI commands
+
+      - name: Simulate Code Review and Merge PR
+        # This step simulates a code review by adding a comment and then merging the PR after a delay.
+        if: success() && steps.create_pr.outputs.pr_number # Only run if PR was created successfully
+        run: |
+          PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
+          BRANCH_NAME="${{ steps.create_commit_pr.outputs.branch_name }}"
+
+          echo "Simulating code review for PR #$PR_NUMBER..."
+
+          # Add a review comment to the PR.
+          gh pr comment "$PR_NUMBER" --body "Looks good to me! Automated review completed." --repo ${{ github.repository }}
+          echo "Added review comment to PR #$PR_NUMBER."
+
+          # Introduce a random delay for "review time" before merging.
+          # Max delay: 2 hours (7200 seconds).
+          RANDOM_REVIEW_DELAY_SECONDS=$(( RANDOM % 7201 )) # Generates a number from 0 to 7200
+          echo "Waiting for $RANDOM_REVIEW_DELAY_SECONDS seconds to simulate review time."
+          sleep "$RANDOM_REVIEW_DELAY_SECONDS"
+          echo "Finished review delay."
+
+          # Merge the pull request. Using '--merge' creates a merge commit.
+          gh pr merge "$PR_NUMBER" --merge --repo ${{ github.repository }}
+          echo "Merged Pull Request #$PR_NUMBER."
+
+          # Delete the source branch after merging.
+          gh branch delete "$BRANCH_NAME" --yes --repo ${{ github.repository }}
+          echo "Deleted branch '$BRANCH_NAME'."
+        shell: bash # Explicitly use bash for the script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed for gh CLI commands
+
+      - name: Create random issue
+        id: create_issue # Add an ID to the step to reference its outputs
+        # This step creates a new issue with a dynamic title and body.
+        run: |
+          # Generate a dynamic title for the issue, including the current timestamp.
+          ISSUE_TITLE="Daily Automated Activity - $(date +%Y-%m-%d %H:%M:%S)"
+          # Generate a dynamic body for the issue, including timestamps and a random string.
+          # '\n\n' creates new lines in Markdown.
+          ISSUE_BODY="This is a random issue created by a GitHub Action at $(date +%H:%M:%S %Z) on $(date +%A, %B %d, %Y).\n\nA random commit and pull request were also processed in this run.\nRandom string for this run: $(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 10)"
+
+          echo "Attempting to create issue with title: $ISSUE_TITLE"
+
+          # Create the issue using 'gh issue create'.
+          # '--json number -q .number' extracts only the issue number from the JSON output.
+          # '--repo ${{ github.repository }}' ensures the issue is created in the correct repository.
+          ISSUE_NUMBER=$(gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY" --json number -q .number --repo ${{ github.repository }})
+          echo "Created issue #$ISSUE_NUMBER"
+          # Output the issue number so it can be used by subsequent steps (like closing it).
+          echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+        shell: bash # Explicitly use bash for the script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed for gh CLI commands
+
+      - name: Random Delay and Close Issue
+        # This step will only run if the 'create_issue' step succeeded and actually output an issue number.
+        if: success() && steps.create_issue.outputs.issue_number
+        # This step introduces a random delay before closing the issue.
+        run: |
+          # Retrieve the issue number from the output of the previous step.
+          ISSUE_NUMBER="${{ steps.create_issue.outputs.issue_number }}"
+          echo "Issue number to close: $ISSUE_NUMBER"
+
+          # Calculate a random delay in seconds.
+          # Minimum delay: 0 seconds (closes immediately)
+          # Maximum delay: 18000 seconds (5 hours, to stay well within typical 6-hour job timeouts)
+          RANDOM_DELAY_SECONDS=$(( RANDOM % 18001 )) # Generates a number from 0 to 18000
+          echo "Calculated random delay for issue closure: $RANDOM_DELAY_SECONDS seconds."
+
+          # Introduce the delay if it's greater than 0.
+          if [ "$RANDOM_DELAY_SECONDS" -gt 0 ]; then
+            echo "Sleeping for $RANDOM_DELAY_SECONDS seconds before closing the issue..."
+            sleep "$RANDOM_DELAY_SECONDS"
+            echo "Finished sleeping."
+          else
+            echo "No delay (closing immediately)."
+          fi
+
+          # Close the issue using 'gh issue close'.
+          # '--comment' adds a comment when closing the issue.
+          echo "Attempting to close issue #$ISSUE_NUMBER"
+          gh issue close "$ISSUE_NUMBER" --comment "Closing this daily activity issue as part of the automated workflow after a random delay." --repo ${{ github.repository }}
+          echo "Closed issue #$ISSUE_NUMBER"
+        shell: bash # Explicitly use bash for the script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed for gh CLI commands
