@@ -103,9 +103,9 @@ jobs:
         shell: bash # Explicitly use bash for the script
 
       - name: Setup GitHub CLI
-        # This step uses the 'cli/gh-cli' action to install and configure the GitHub CLI.
+        # This step uses the 'cli/cli' action to install and configure the GitHub CLI.
         # The GitHub CLI is used to interact with GitHub issues and PRs via command-line.
-        uses: cli/gh-cli@v1
+        uses: cli/cli@v1 # Changed from cli/gh-cli@v2 to cli/cli@v1
         with:
           # Pass the GITHUB_TOKEN to the gh-cli action for authentication.
           token: ${{ secrets.GITHUB_TOKEN }}
